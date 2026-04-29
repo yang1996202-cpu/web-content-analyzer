@@ -41,9 +41,10 @@
       "example": "const reports = await Promise.all(urls.map(analyzeWebPage));"
     },
     "browse": {
-      "when": "before $B goto or $B text commands",
-      "how": "check URL content length before loading into browser, warn if too long for $B text extraction",
-      "example": "const report = await analyzeWebPage(url); if (report.level==='danger') use progressive dialogue instead of $B text"
+      "when": "before $B text command (NOT $B snapshot — snapshot returns Accessibility Tree which is already compact)",
+      "how": "$B snapshot returns structure (small), but $B text returns full page text (potentially huge). Use web-content-analyzer before $B text to check if content fits in context. If danger level, use $B snapshot -i or $B snapshot -d 2 instead of $B text",
+      "example": "const report = await analyzeWebPage(url); if (report.assessment.level==='danger') { use '$B snapshot -i' instead of '$B text' } else { safe to use '$B text' }",
+      "note": "browse uses headless Chromium. $B snapshot returns Accessibility Tree (naturally compact). $B text returns full text (may overflow). Our skill is only needed for $B text scenarios."
     },
     "ocr-document-processor": {
       "when": "after OCR extraction, before feeding text to AI",
