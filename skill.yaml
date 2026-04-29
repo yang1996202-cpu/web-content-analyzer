@@ -1,0 +1,28 @@
+name: web-content-analyzer
+version: 1.0.0
+description: 分析网页内容长度，智能选择给 AI 的策略
+author: 杨京艺
+license: MIT
+
+# Skill 入口点
+entry_point: analyze.js
+
+# 需要的工具权限
+tools:
+  - web_fetch
+  - file_write
+
+# 配置项
+config:
+  # 安全阈值（汉字数）
+  safe_threshold: 3000
+  warning_threshold: 10000
+  
+  # Token 估算比例（汉字 : Token ≈ 1 : 1.5）
+  token_ratio: 1.5
+
+# 提示词模板
+prompts:
+  safe: "直接给 AI 链接或粘贴全文"
+  warning: "给链接 + 指定章节，或分段询问"
+  danger: "必须拆分：先问文档结构，再逐步深入具体章节"

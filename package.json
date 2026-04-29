@@ -1,0 +1,28 @@
+{
+  "name": "web-content-analyzer",
+  "version": "1.0.0",
+  "description": "分析网页内容长度，智能选择给 AI 的策略",
+  "main": "analyze.js",
+  "scripts": {
+    "start": "node analyze.js",
+    "test": "node test.js"
+  },
+  "keywords": [
+    "ai",
+    "context-window",
+    "web-analysis",
+    "prompt-engineering",
+    "llm",
+    "content-strategy"
+  ],
+  "author": "杨京艺",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/web-content-analyzer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/web-content-analyzer/issues"
+  },
+  "homepage": "https://github.com/your-username/web-content-analyzer#readme"
+}
