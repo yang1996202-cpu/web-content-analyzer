@@ -1,0 +1,21 @@
+{
+  "name": "web-content-analyzer",
+  "version": "1.0.0",
+  "description": "Analyze web page content length and recommend optimal AI reading strategy. Prevents context overflow.",
+  "type": "utility",
+  "category": "pre-processing",
+  "composable": true,
+  "hooks": ["before-fetch", "before-search", "before-read"],
+  "thresholds": {
+    "safe": 3000,
+    "warning": 10000,
+    "tokenRatio": 1.5
+  },
+  "requires_api_key": false,
+  "dependencies": [],
+  "integrations": {
+    "multi-search-engine": "pre-check before reading search results",
+    "ocr-document-processor": "check OCR output length before feeding to AI",
+    "browse": "pre-check before browser content extraction"
+  }
+}
