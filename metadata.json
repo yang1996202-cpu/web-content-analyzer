@@ -1,11 +1,32 @@
 {
   "name": "web-content-analyzer",
-  "version": "1.0.0",
-  "description": "Analyze web page content length and recommend optimal AI reading strategy. Prevents context overflow.",
+  "version": "1.1.0",
+  "description": "Analyze web page content length and recommend optimal AI reading strategy. Prevents context overflow. Call BEFORE fetching/reading web content.",
   "type": "utility",
   "category": "pre-processing",
   "composable": true,
-  "hooks": ["before-fetch", "before-search", "before-read"],
+  "hooks": {
+    "before-fetch": {
+      "description": "Call before web_fetch to check if content fits in context",
+      "input": "url",
+      "output": "assessment level + recommended prompt"
+    },
+    "before-browse": {
+      "description": "Call before $B goto/$B text to estimate page content size",
+      "input": "url",
+      "output": "assessment level + strategy"
+    },
+    "before-search": {
+      "description": "Call after multi-search-engine returns results, before reading result pages",
+      "input": "url[]",
+      "output": "sorted URLs by length + strategy per URL"
+    },
+    "before-ocr": {
+      "description": "Call after OCR extraction to check if output fits in context",
+      "input": "text",
+      "output": "assessment level + chunking strategy"
+    }
+  },
   "thresholds": {
     "safe": 3000,
     "warning": 10000,
@@ -14,8 +35,42 @@
   "requires_api_key": false,
   "dependencies": [],
   "integrations": {
-    "multi-search-engine": "pre-check before reading search results",
-    "ocr-document-processor": "check OCR output length before feeding to AI",
-    "browse": "pre-check before browser content extraction"
+    "multi-search-engine": {
+      "when": "after search returns URLs, before reading them",
+      "how": "analyze each result URL, sort by length, recommend strategy per URL",
+      "example": "const reports = await Promise.all(urls.map(analyzeWebPage));"
+    },
+    "browse": {
+      "when": "before $B goto or $B text commands",
+      "how": "check URL content length before loading into browser, warn if too long for $B text extraction",
+      "example": "const report = await analyzeWebPage(url); if (report.level==='danger') use progressive dialogue instead of $B text"
+    },
+    "ocr-document-processor": {
+      "when": "after OCR extraction, before feeding text to AI",
+      "how": "check extracted text length, chunk if needed",
+      "example": "const stats = calculateStats(ocrText); if (stats.charCount > 10000) chunk and process separately"
+    },
+    "find-skills": {
+      "when": "when user asks about web content reading or context management",
+      "how": "recommend this skill as a pre-processing step",
+      "example": "npx skills add web-content-analyzer"
+    }
+  },
+  "api": {
+    "analyzeWebPage": {
+      "input": "url (string)",
+      "output": "report object with statistics, assessment, recommendations",
+      "async": true
+    },
+    "calculateStats": {
+      "input": "text (string)",
+      "output": "stats object with charCount, tokenEstimate, etc.",
+      "async": false
+    },
+    "formatReport": {
+      "input": "report (object)",
+      "output": "formatted string for display",
+      "async": false
+    }
   }
 }
