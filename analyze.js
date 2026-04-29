@@ -48,18 +48,33 @@ async function analyzeWebPage(url) {
   }
 }
 
-/**
- * 获取网页内容（模拟 web_fetch 工具）
- */
 async function fetchWebContent(url) {
-  // 实际实现会调用 web_fetch 工具
-  // 这里返回模拟数据用于演示
-  const response = await webFetch({
-    url: url,
-    maxLength: SKILL_CONFIG.maxFetchLength
-  });
-  
-  return response.text || response.body || "";
+  let fetchUrl = url;
+  if (url.includes('github.com') && !url.includes('raw.githubusercontent.com')) {
+    const parts = url.replace('https://github.com/', '').split('/');
+    if (parts.length >= 2) {
+      const [owner, repo] = parts;
+      fetchUrl = `https://raw.githubusercontent.com/${owner}/${repo}/main/README.md`;
+    }
+  }
+  try {
+    const response = await fetch(fetchUrl, {
+      headers: { 'User-Agent': 'WebContentAnalyzer/1.0' },
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!response.ok) {
+      const altUrl = fetchUrl.replace('/main/', '/master/');
+      const altResp = await fetch(altUrl, {
+        headers: { 'User-Agent': 'WebContentAnalyzer/1.0' },
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!altResp.ok) throw new Error(`HTTP ${response.status}`);
+      return (await altResp.text()).substring(0, SKILL_CONFIG.maxFetchLength);
+    }
+    return (await response.text()).substring(0, SKILL_CONFIG.maxFetchLength);
+  } catch (err) {
+    throw new Error(`fetch failed: ${err.message}`);
+  }
 }
 
 /**
