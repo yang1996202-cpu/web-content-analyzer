@@ -1,0 +1,16 @@
+[
+  {
+    "url": "https://www.google.com/search?q=openclaw",
+    "error": "Cannot read properties of undefined (reading 'totalChars')"
+  },
+  {
+    "url": "https://www.baidu.com/s?wd=openclaw",
+    "chars": 0,
+    "tokens": 0,
+    "level": "safe"
+  },
+  {
+    "url": "https://github.com/yang1996202-cpu/web-content-analyzer",
+    "error": "Cannot read properties of undefined (reading 'totalChars')"
+  }
+]

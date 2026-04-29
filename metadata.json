@@ -1,77 +1,109 @@
 {
   "name": "web-content-analyzer",
-  "version": "1.1.0",
-  "description": "Analyze web page content length and recommend optimal AI reading strategy. Prevents context overflow. Call BEFORE fetching/reading web content.",
+  "version": "1.2.0",
+  "description": "Analyze web page content length and recommend optimal AI reading strategy. Prevents context overflow.",
   "type": "utility",
   "category": "pre-processing",
   "composable": true,
   "hooks": {
-    "before-fetch": {
-      "description": "Call before web_fetch to check if content fits in context",
-      "input": "url",
-      "output": "assessment level + recommended prompt"
+    "before-fetch-url": {
+      "description": "Call before web_fetch on a target URL (not search result pages themselves — those are usually <3000 chars). Use when about to read a full article, README, or documentation page.",
+      "input": "url (string)",
+      "output": "assessment level + recommended prompt",
+      "typical_use": "AI found a URL from search results and wants to read the full content"
     },
-    "before-browse": {
-      "description": "Call before $B goto/$B text to estimate page content size",
-      "input": "url",
-      "output": "assessment level + strategy"
+    "before-browse-text": {
+      "description": "Call before $B text command ONLY. $B snapshot returns Accessibility Tree (naturally compact, ~800 chars), does NOT need pre-check. $B text returns full page text (potentially 25K+ chars), DOES need pre-check.",
+      "input": "url (string)",
+      "output": "assessment level + alternative strategy if danger",
+      "typical_use": "AI wants to extract full text from a web page via browse"
     },
-    "before-search": {
-      "description": "Call after multi-search-engine returns results, before reading result pages",
-      "input": "url[]",
-      "output": "sorted URLs by length + strategy per URL"
-    },
-    "before-ocr": {
-      "description": "Call after OCR extraction to check if output fits in context",
-      "input": "text",
-      "output": "assessment level + chunking strategy"
+    "after-ocr-extraction": {
+      "description": "Call after OCR extracts text from multi-page documents. Single-page OCR (invoices, receipts) typically <500 chars — no pre-check needed. Multi-page PDF (5+ pages) can produce 3500+ chars — pre-check recommended.",
+      "input": "text (string) — the OCR output",
+      "output": "assessment level + chunking strategy",
+      "typical_use": "OCR extracted 30K chars from a 50-page PDF, need to decide how to feed to AI"
     }
   },
   "thresholds": {
     "safe": 3000,
     "warning": 10000,
-    "tokenRatio": 1.5
+    "tokenRatio": 1.5,
+    "rationale": {
+      "safe_3000": "Single tool return limit is ~2-8K tokens. 3000 chars × 1.5 = 4500 tokens, within safe range.",
+      "warning_10000": "10000 chars × 1.5 = 15000 tokens, approaching single return limit. May be truncated.",
+      "empirical_validation": {
+        "google_search_page": "~3500 chars (warning)",
+        "baidu_search_page": "~2800 chars (safe)",
+        "github_readme_short": "~5000 chars (warning)",
+        "github_readme_long_openclaw": "~46000 chars (danger)",
+        "ocr_single_invoice": "~300 chars (safe)",
+        "ocr_5page_report": "~3500 chars (warning)",
+        "ocr_50page_thesis": "~30000 chars (danger)",
+        "browse_snapshot": "~800 chars (safe)",
+        "browse_text_long_page": "~25000 chars (danger)"
+      }
+    }
   },
   "requires_api_key": false,
   "dependencies": [],
   "integrations": {
     "multi-search-engine": {
-      "when": "after search returns URLs, before reading them",
-      "how": "analyze each result URL, sort by length, recommend strategy per URL",
-      "example": "const reports = await Promise.all(urls.map(analyzeWebPage));"
+      "relationship": "NOT for search result pages (those are ~3000 chars, safe). Use AFTER search, BEFORE reading target URLs found in search results.",
+      "when": "AI clicks a search result and wants to read the full page",
+      "how": "analyze the target URL before fetching, recommend strategy",
+      "value": "HIGH — search results often lead to long documentation pages",
+      "example": "const report = await analyzeWebPage(targetUrl); if (report.assessment.level==='danger') use progressive dialogue"
     },
     "browse": {
-      "when": "before $B text command (NOT $B snapshot — snapshot returns Accessibility Tree which is already compact)",
-      "how": "$B snapshot returns structure (small), but $B text returns full page text (potentially huge). Use web-content-analyzer before $B text to check if content fits in context. If danger level, use $B snapshot -i or $B snapshot -d 2 instead of $B text",
-      "example": "const report = await analyzeWebPage(url); if (report.assessment.level==='danger') { use '$B snapshot -i' instead of '$B text' } else { safe to use '$B text' }",
-      "note": "browse uses headless Chromium. $B snapshot returns Accessibility Tree (naturally compact). $B text returns full text (may overflow). Our skill is only needed for $B text scenarios."
+      "relationship": "Only relevant for $B text, NOT $B snapshot. Snapshot returns Accessibility Tree (~800 chars, always safe). $B text returns full page text (potentially 25K+ chars).",
+      "when": "AI plans to use $B text to extract full page content",
+      "how": "pre-check URL, if danger level recommend $B snapshot -i or $B snapshot -d 2 instead",
+      "value": "MEDIUM — $B text is less commonly used than $B snapshot",
+      "example": "const report = await analyzeWebPage(url); if (report.assessment.level==='danger') { use '$B snapshot -i' } else { '$B text' is safe }",
+      "note": "browse uses headless Chromium. Most browse workflows use snapshot (compact). $B text is the edge case."
     },
     "ocr-document-processor": {
-      "when": "after OCR extraction, before feeding text to AI",
-      "how": "check extracted text length, chunk if needed",
-      "example": "const stats = calculateStats(ocrText); if (stats.charCount > 10000) chunk and process separately"
+      "relationship": "Only relevant for multi-page documents. Single-page OCR output is typically <500 chars (safe). Multi-page PDF can produce 30K+ chars (danger).",
+      "when": "OCR extracts text from 5+ page documents",
+      "how": "use calculateStats(ocrText) to check output length, chunk if danger level",
+      "value": "MEDIUM — only for multi-page document scenarios",
+      "example": "const stats = calculateStats(ocrText); if (stats.charCount > 10000) { chunk and process page by page }",
+      "note": "Requires calculateStats(text) API, not analyzeWebPage(url). OCR output is already text, not a URL."
+    },
+    "ocr-super-surya": {
+      "relationship": "Same as ocr-document-processor. Only relevant for multi-page document output.",
+      "when": "Surya OCR extracts text from 5+ page documents",
+      "how": "use calculateStats(ocrText) to check output length",
+      "value": "LOW — Surya is typically used for single images, not multi-page documents",
+      "example": "same as ocr-document-processor"
     },
     "find-skills": {
-      "when": "when user asks about web content reading or context management",
-      "how": "recommend this skill as a pre-processing step",
-      "example": "npx skills add web-content-analyzer"
+      "relationship": "NOT a technical integration. find-skills output is ~1500 chars (always safe). This is a DISCOVERY channel — users can find and install our skill through find-skills.",
+      "when": "user asks 'is there a skill for web content analysis' or 'how to avoid context overflow'",
+      "how": "find-skills recommends our skill for installation",
+      "value": "DISCOVERY — not a runtime integration",
+      "example": "npx skills add yang1996202-cpu/web-content-analyzer"
     }
   },
   "api": {
     "analyzeWebPage": {
       "input": "url (string)",
       "output": "report object with statistics, assessment, recommendations",
-      "async": true
+      "async": true,
+      "use_when": "you have a URL and want to know if it's safe to read directly"
     },
     "calculateStats": {
       "input": "text (string)",
-      "output": "stats object with charCount, tokenEstimate, etc.",
-      "async": false
+      "output": "stats object with charCount, tokenEstimate, screenEstimate",
+      "async": false,
+      "use_when": "you already have text (e.g., OCR output) and want to check if it fits in context"
     },
     "formatReport": {
       "input": "report (object)",
       "output": "formatted string for display",
-      "async": false
+      "async": false,
+      "use_when": "you want to show the analysis result to the user"
     }
   }
 }
