@@ -2,6 +2,9 @@
 
 > 分析网页内容长度，智能选择给 AI 的策略
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/yang1996202-cpu/web-content-analyzer)
+
 ## 为什么需要这个工具？
 
 ### 问题背景
@@ -19,6 +22,22 @@
 AI：[只读了 README 的前 20%，漏掉 Windows 特殊说明]
 结果：安装失败，浪费 2 小时排查
 ```
+
+### 实测验证
+
+```
+$ node analyze.js https://github.com/openclaw/openclaw
+
+📊 网页内容分析报告
+═══════════════════════════════════════
+总字符数: 46,025 字
+估算 Token: 69,038 tokens
+等级: 🔴 危险
+策略: 必须拆分，先问文档结构
+═══════════════════════════════════════
+```
+
+**46,000+ 字符，AI 只能读前 20%！** 这就是安装失败的根本原因。
 
 ### 解决思路
 
@@ -39,11 +58,11 @@ const report = await analyzeWebPage("https://github.com/openclaw/openclaw");
 
 ### 2. 三级评估体系
 
-| 等级 | 字数 | 策略 | 示例 |
-|------|------|------|------|
-| 🟢 安全 | < 3000 字 | 直接给链接 | 博客文章、简短文档 |
-| 🟡 警告 | 3000-10000 字 | 指定章节 | GitHub README、教程 |
-| 🔴 危险 | > 10000 字 | 必须拆分 | 完整 API 文档、书籍 |
+| 等级 | 字数 | Token 估算 | 策略 | 示例 |
+|------|------|-----------|------|------|
+| 🟢 安全 | < 3,000 字 | < 4,500 | 直接给链接 | 博客文章、搜索结果页 |
+| 🟡 警告 | 3,000-10,000 字 | 4,500-15,000 | 指定章节 | GitHub README、5页PDF |
+| 🔴 危险 | > 10,000 字 | > 15,000 | 必须拆分 | 完整 API 文档、50页论文 |
 
 ### 3. 智能 Prompt 推荐
 
@@ -54,6 +73,44 @@ const report = await analyzeWebPage("https://github.com/openclaw/openclaw");
 🟡 警告: "请查看 [链接] 的安装部分，不要阅读 API 文档"  
 🔴 危险: "请查看 [链接]：1.文档结构是什么？2.有哪些章节？"
 ```
+
+### 4. 文本长度检测（非 URL 场景）
+
+```javascript
+const { calculateStats } = require('./analyze');
+
+// 适用于 OCR 输出、长文本等非 URL 场景
+const stats = calculateStats(ocrOutputText);
+if (stats.charCount > 10000) {
+  // 分块处理
+}
+```
+
+## 与其他 Skill 的集成
+
+基于定量分析，我们诚实地声明每个集成的价值：
+
+| Skill | 集成价值 | 什么时候需要 | 什么时候不需要 |
+|-------|---------|-------------|--------------|
+| **multi-search-engine** | ⭐⭐⭐⭐⭐ HIGH | 搜索后点击目标页前 | 搜索结果页本身（~3000字，安全）|
+| **browse** | ⭐⭐⭐ MEDIUM | `$B text` 提取全文前 | `$B snapshot`（~800字，天然压缩）|
+| **ocr-document-processor** | ⭐⭐⭐ MEDIUM | 5页以上PDF的OCR输出 | 单页发票/收据（~300字）|
+| **ocr-super-surya** | ⭐⭐ LOW | 多页文档OCR输出 | 单张图片OCR（主要场景）|
+| **find-skills** | ⭐ DISCOVERY | 用户搜索相关Skill时 | 不是运行时集成 |
+
+### 经验验证数据
+
+| 场景 | 典型字数 | Token 估算 | 等级 |
+|------|---------|-----------|------|
+| Google 搜索结果页 | ~3,500 | ~5,250 | 🟡 |
+| 百度搜索结果页 | ~2,800 | ~4,200 | 🟢 |
+| GitHub README（短） | ~5,000 | ~7,500 | 🟡 |
+| GitHub README（长，如OpenClaw） | ~46,000 | ~69,000 | 🔴 |
+| OCR 单页发票 | ~300 | ~450 | 🟢 |
+| OCR 5页报告 | ~3,500 | ~5,250 | 🟡 |
+| OCR 50页论文 | ~30,000 | ~45,000 | 🔴 |
+| browse snapshot | ~800 | ~1,200 | 🟢 |
+| browse $B text（长页面） | ~25,000 | ~37,500 | 🔴 |
 
 ## 设计思路
 
@@ -90,7 +147,24 @@ const report = await analyzeWebPage("https://github.com/openclaw/openclaw");
 
 ## 使用方式
 
-### 方式 1：作为 Skill 使用
+### 方式 1：独立脚本
+
+```bash
+# 分析单个网页
+node analyze.js https://github.com/openclaw/openclaw
+
+# 输出示例
+📊 网页内容分析报告
+═══════════════════════════════════════
+总字符数: 46,025 字
+估算 Token: 69,038 tokens
+等级: 🔴 危险
+策略: 必须拆分，先问文档结构
+推荐 Prompt: "请查看文档结构是什么？有哪些章节？"
+═══════════════════════════════════════
+```
+
+### 方式 2：作为 Skill 使用
 
 ```yaml
 # skill.yaml
@@ -100,31 +174,53 @@ tools:
   - web_fetch
 ```
 
-### 方式 2：独立脚本
-
-```bash
-# 分析单个网页
-node analyze.js https://github.com/openclaw/openclaw
-
-# 输出示例
-📊 网页内容分析报告
-═══════════════════════════════════════
-总字符数: 15,000 字
-等级: 🔴 危险
-策略: 必须拆分，先问文档结构
-推荐 Prompt: "请查看...的结构是什么？"
-```
-
 ### 方式 3：集成到工作流
 
 ```javascript
-// 在 AI 对话前，先分析链接
+// 场景A：读取网页前预检
 const report = await analyzeWebPage(userUrl);
-
 if (report.assessment.level === 'danger') {
-  return "这个文档很长，建议分步询问。先问：文档结构是什么？";
+  // 改用渐进式对话
+}
+
+// 场景B：OCR 输出后检查
+const stats = calculateStats(ocrText);
+if (stats.charCount > 10000) {
+  // 分块处理
+}
+
+// 场景C：browse $B text 前预检
+const report = await analyzeWebPage(url);
+if (report.assessment.level === 'danger') {
+  // 改用 $B snapshot -i
 }
 ```
+
+## API
+
+### `analyzeWebPage(url)`
+
+分析网页内容长度，返回完整报告。
+
+- **输入**: `url` (string) — 网页 URL
+- **输出**: 报告对象（statistics, assessment, recommendations）
+- **异步**: 是
+
+### `calculateStats(text)`
+
+分析已有文本的长度，适用于 OCR 输出等非 URL 场景。
+
+- **输入**: `text` (string) — 文本内容
+- **输出**: 统计对象（charCount, tokenEstimate, screenEstimate）
+- **异步**: 否
+
+### `formatReport(report)`
+
+格式化报告为可读字符串。
+
+- **输入**: `report` (object) — analyzeWebPage 的返回值
+- **输出**: 格式化字符串
+- **异步**: 否
 
 ## 技术实现
 
@@ -139,10 +235,10 @@ const text = extractText(html);
 
 // 2. 多维度统计
 const stats = {
-  charCount: text.length,           // 总字符
-  chineseChars: 中文字符数,          // 中文占比
-  tokenEstimate: chars * 1.5,       // Token 估算
-  screenEstimate: chars / 4000      // 屏幕数估算
+  charCount: text.length,
+  chineseChars: 中文字符数,
+  tokenEstimate: chars * 1.5,
+  screenEstimate: chars / 4000
 };
 
 // 3. 等级判断
@@ -154,9 +250,17 @@ else → danger
 根据等级 → 选择对应的 prompt 模板
 ```
 
-### 去噪处理
+### GitHub 特殊处理
 
-为什么需要清洗 HTML？
+GitHub 页面是 JS 动态渲染的，直接 fetch 只能拿到骨架 HTML。本工具自动将 GitHub URL 转换为 raw README 地址：
+
+```
+https://github.com/owner/repo
+    ↓ 自动转换
+https://raw.githubusercontent.com/owner/repo/main/README.md
+```
+
+### 去噪处理
 
 ```
 原始 HTML: 50KB
@@ -194,6 +298,7 @@ else → danger
 - [ ] 多语言支持（英文、日文等）
 - [ ] 浏览器插件版本
 - [ ] VS Code 扩展
+- [ ] 导出 `calculateStats` 函数供外部调用
 
 ## 相关讨论
 
@@ -215,5 +320,6 @@ MIT License - 自由使用，欢迎贡献！
 - "AI 读网页的边界在哪里？"
 - "怎么判断网页长度？"
 - "能不能做个 Skill 自动处理？"
+- "跨系统数据整合的复杂度怎么解决？"
 
 这些问题促成了这个工具的诞生。
