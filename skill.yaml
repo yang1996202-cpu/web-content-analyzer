@@ -1,6 +1,6 @@
 name: web-content-analyzer
-version: 1.0.0
-description: 分析网页内容长度，智能选择给 AI 的策略
+version: 2.0.0
+description: 内容预算预检器：分析网页或文本规模，推荐 AI 阅读策略
 author: 杨京艺
 license: MIT
 
@@ -18,11 +18,11 @@ config:
   safe_threshold: 3000
   warning_threshold: 10000
   
-  # Token 估算比例（汉字 : Token ≈ 1 : 1.5）
-  token_ratio: 1.5
+  # 最大分析原始内容长度，避免超大页面拖慢流程
+  max_fetch_length: 100000
 
 # 提示词模板
 prompts:
   safe: "直接给 AI 链接或粘贴全文"
-  warning: "给链接 + 指定章节，或分段询问"
-  danger: "必须拆分：先问文档结构，再逐步深入具体章节"
+  warning: "带着明确问题阅读，优先指定章节"
+  danger: "先问结构，再按章节、任务或关键词分块处理"

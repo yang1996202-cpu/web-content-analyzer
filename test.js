@@ -1,147 +1,113 @@
-/**
- * Web Content Analyzer 测试用例
- */
+const assert = require("node:assert/strict");
+const {
+  calculateStats,
+  assessLevel,
+  extractText,
+  resolveFetchCandidates,
+  formatReport,
+  SKILL_CONFIG
+} = require("./analyze");
 
-const { analyzeWebPage, formatReport, SKILL_CONFIG } = require('./analyze');
-
-// 模拟 web_fetch 工具
-async function mockWebFetch(url) {
-  // 模拟不同长度的网页内容
-  const mockData = {
-    'short': {
-      text: '这是一篇短文章。'.repeat(100), // 约 800 字
-      expectedLevel: 'safe'
-    },
-    'medium': {
-      text: '这是一篇中等长度的文档。'.repeat(500), // 约 4000 字
-      expectedLevel: 'warning'
-    },
-    'long': {
-      text: '这是一篇很长的技术文档。'.repeat(2000), // 约 16000 字
-      expectedLevel: 'danger'
-    }
-  };
-  
-  // 根据 URL 参数返回不同长度
-  const type = url.includes('short') ? 'short' : 
-               url.includes('medium') ? 'medium' : 'long';
-  
-  return {
-    text: mockData[type].text,
-    expectedLevel: mockData[type].expectedLevel
-  };
-}
-
-// 替换实际的 webFetch
-async function testWithMock(url) {
-  const mockResult = await mockWebFetch(url);
-  
-  // 直接测试内部函数
-  const text = mockResult.text;
-  const stats = {
-    charCount: text.length,
-    chineseChars: (text.match(/[\u4e00-\u9fa5]/g) || []).length,
-    englishWords: 0,
-    tokenEstimate: Math.ceil(text.length * 1.5),
-    lineCount: text.split('\n').length,
-    screenEstimate: Math.ceil(text.length / 4000)
-  };
-  
-  // 使用 assessLevel 逻辑
-  let level;
-  if (stats.charCount < SKILL_CONFIG.safeThreshold) level = 'safe';
-  else if (stats.charCount < SKILL_CONFIG.warningThreshold) level = 'warning';
-  else level = 'danger';
-  
-  return {
-    url,
-    charCount: stats.charCount,
-    expectedLevel: mockResult.expectedLevel,
-    actualLevel: level,
-    pass: mockResult.expectedLevel === level
-  };
-}
-
-// 运行测试
-async function runTests() {
-  console.log('🧪 运行 Web Content Analyzer 测试\n');
-  
-  const tests = [
-    { url: 'https://example.com/short', name: '短文章测试' },
-    { url: 'https://example.com/medium', name: '中等文档测试' },
-    { url: 'https://example.com/long', name: '长文档测试' }
+function testAssessmentThresholds() {
+  const cases = [
+    { text: "这是一篇短文章。".repeat(100), expected: "safe" },
+    { text: "这是一篇中等长度的文档。".repeat(500), expected: "warning" },
+    { text: "这是一篇很长的技术文档。".repeat(2000), expected: "danger" }
   ];
-  
-  let passed = 0;
-  let failed = 0;
-  
-  for (const test of tests) {
-    const result = await testWithMock(test.url);
-    const status = result.pass ? '✅ 通过' : '❌ 失败';
-    
-    console.log(`${status} - ${test.name}`);
-    console.log(`  字数: ${result.charCount}`);
-    console.log(`  期望: ${result.expectedLevel}, 实际: ${result.actualLevel}`);
-    console.log();
-    
-    if (result.pass) passed++;
-    else failed++;
+
+  for (const item of cases) {
+    const stats = calculateStats(item.text);
+    const assessment = assessLevel(stats);
+    assert.equal(assessment.level, item.expected);
   }
-  
-  console.log(`\n📊 测试结果: ${passed} 通过, ${failed} 失败`);
-  
-  // 测试阈值配置
-  console.log('\n📋 当前阈值配置:');
-  console.log(`  安全线: ${SKILL_CONFIG.safeThreshold} 字`);
-  console.log(`  警告线: ${SKILL_CONFIG.warningThreshold} 字`);
-  console.log(`  Token 比例: ${SKILL_CONFIG.tokenRatio}`);
 }
 
-// 测试格式化输出
+function testCalculateStatsExport() {
+  const stats = calculateStats("Hello world\n你好，世界");
+
+  assert.equal(stats.lineCount, 2);
+  assert.equal(stats.chineseChars, 4);
+  assert.equal(stats.englishWords, 2);
+  assert.ok(stats.estimatedTokens > 0);
+}
+
+function testHtmlExtractionPreservesLines() {
+  const html = `
+    <html>
+      <head><style>.x{}</style><script>alert(1)</script></head>
+      <body><nav>menu</nav><h1>Title</h1><p>First paragraph.</p><p>Second paragraph.</p></body>
+    </html>
+  `;
+
+  const text = extractText(html);
+  assert.match(text, /Title/);
+  assert.match(text, /First paragraph/);
+  assert.doesNotMatch(text, /alert/);
+  assert.doesNotMatch(text, /menu/);
+  assert.ok(text.split(/\r?\n/).length > 1);
+}
+
+function testGitHubUrlResolution() {
+  const repo = resolveFetchCandidates("https://github.com/yang1996202-cpu/web-content-analyzer");
+  assert.equal(repo[0].url, "https://raw.githubusercontent.com/yang1996202-cpu/web-content-analyzer/main/README.md");
+  assert.equal(repo[1].url, "https://raw.githubusercontent.com/yang1996202-cpu/web-content-analyzer/master/README.md");
+
+  const blob = resolveFetchCandidates("https://github.com/owner/repo/blob/dev/docs/guide.md");
+  assert.deepEqual(blob, [
+    {
+      type: "github-blob",
+      url: "https://raw.githubusercontent.com/owner/repo/dev/docs/guide.md"
+    }
+  ]);
+}
+
 function testFormatReport() {
-  console.log('\n📝 测试格式化输出:\n');
-  
-  const mockReport = {
-    url: 'https://github.com/example/test',
+  const stats = calculateStats("测试内容".repeat(100), {
+    sourceChars: 5000,
+    analyzedChars: 400,
+    truncated: true
+  });
+  const assessment = assessLevel(stats);
+  const report = {
+    url: "https://example.com",
+    fetchedUrl: "https://example.com",
     timestamp: new Date().toISOString(),
     statistics: {
-      totalChars: 5000,
-      chineseChars: 3000,
-      englishWords: 500,
-      estimatedTokens: 7500,
-      lineCount: 100,
-      estimatedScreens: 2
+      totalChars: stats.charCount,
+      sourceChars: stats.sourceChars,
+      analyzedChars: stats.analyzedChars,
+      truncated: stats.truncated,
+      cjkChars: stats.cjkChars,
+      englishWords: stats.englishWords,
+      estimatedTokens: stats.estimatedTokens,
+      lineCount: stats.lineCount,
+      estimatedScreens: stats.estimatedScreens
     },
-    assessment: {
-      level: 'warning',
-      emoji: '🟡',
-      label: '警告',
-      description: '内容中等，AI 可能截断尾部',
-      strategy: '给链接 + 指定章节，或分段询问',
-      confidence: 'medium'
-    },
+    assessment,
     recommendations: {
-      bestPrompt: '请查看 https://github.com/example/test 的安装部分',
-      alternativePrompts: {
-        direct: '请阅读...',
-        structured: '请查看...的结构'
-      }
-    },
-    thresholds: {
-      safe: 3000,
-      warning: 10000,
-      current: 5000
+      bestPrompt: "请阅读 https://example.com",
+      actions: ["直接阅读或总结"]
     }
   };
-  
-  console.log(formatReport(mockReport));
+
+  const output = formatReport(report);
+  assert.match(output, /内容预算分析报告/);
+  assert.match(output, /截断提示/);
 }
 
-// 运行所有测试
+function runTests() {
+  testAssessmentThresholds();
+  testCalculateStatsExport();
+  testHtmlExtractionPreservesLines();
+  testGitHubUrlResolution();
+  testFormatReport();
+
+  console.log("All tests passed");
+  console.log(`Thresholds: safe < ${SKILL_CONFIG.safeThreshold}, warning < ${SKILL_CONFIG.warningThreshold}`);
+}
+
 if (require.main === module) {
-  runTests().then(() => {
-    testFormatReport();
-  });
+  runTests();
 }
 
-module.exports = { runTests, testFormatReport };
+module.exports = { runTests };

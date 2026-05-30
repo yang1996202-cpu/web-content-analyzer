@@ -1,7 +1,7 @@
 {
   "name": "web-content-analyzer",
-  "version": "1.0.0",
-  "description": "分析网页内容长度，智能选择给 AI 的策略",
+  "version": "2.0.0",
+  "description": "内容预算预检器：分析网页或文本规模，推荐 AI 阅读策略",
   "main": "analyze.js",
   "scripts": {
     "start": "node analyze.js",
@@ -10,6 +10,7 @@
   "keywords": [
     "ai",
     "context-window",
+    "context-budget",
     "web-analysis",
     "prompt-engineering",
     "llm",
@@ -19,10 +20,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/web-content-analyzer.git"
+    "url": "https://github.com/yang1996202-cpu/web-content-analyzer.git"
   },
   "bugs": {
-    "url": "https://github.com/your-username/web-content-analyzer/issues"
+    "url": "https://github.com/yang1996202-cpu/web-content-analyzer/issues"
   },
-  "homepage": "https://github.com/your-username/web-content-analyzer#readme"
+  "homepage": "https://github.com/yang1996202-cpu/web-content-analyzer#readme"
 }

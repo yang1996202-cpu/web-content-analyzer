@@ -1,240 +1,266 @@
 /**
- * Web Content Analyzer Skill
- * 
- * 分析网页内容长度，智能推荐 AI 处理策略
- * 解决：给 AI 网页链接时，不知道内容多长、会不会超上下文限制
+ * Web Content Analyzer
+ *
+ * A content-budget preflight tool. It estimates how large a web page or text
+ * block is before an AI workflow tries to read or summarize it.
  */
 
 const SKILL_CONFIG = {
-  safeThreshold: 3000,      // 🟢 安全线：小于 3000 字
-  warningThreshold: 10000,  // 🟡 警告线：3000-10000 字
-  tokenRatio: 1.5,          // Token 估算比例
-  maxFetchLength: 50000     // 最大获取长度（防止超大页面）
+  safeThreshold: 3000,
+  warningThreshold: 10000,
+  maxFetchLength: 100000,
+  timeoutMs: 15000
 };
 
-/**
- * 主分析函数
- * @param {string} url - 要分析的网页 URL
- * @returns {object} 分析报告
- */
 async function analyzeWebPage(url) {
-  console.log(`🔍 正在分析: ${url}`);
-  
   try {
-    // 1. 获取网页内容
-    const content = await fetchWebContent(url);
-    
-    // 2. 提取纯文本
-    const text = extractText(content);
-    
-    // 3. 计算统计
-    const stats = calculateStats(text);
-    
-    // 4. 判断等级和策略
+    const fetched = await fetchWebContent(url);
+    const text = fetched.kind === "html" ? extractText(fetched.content) : fetched.content;
+    const stats = calculateStats(text, {
+      sourceChars: fetched.sourceChars,
+      analyzedChars: text.length,
+      truncated: fetched.truncated
+    });
     const assessment = assessLevel(stats);
-    
-    // 5. 生成推荐 Prompt
-    const prompts = generatePrompts(url, assessment);
-    
-    // 6. 输出完整报告
-    return generateReport(url, stats, assessment, prompts);
-    
+    const recommendations = generateRecommendations(url, assessment, stats);
+
+    return generateReport(url, fetched, stats, assessment, recommendations);
   } catch (error) {
     return {
       error: true,
       message: `分析失败: ${error.message}`,
-      suggestion: "请检查 URL 是否可访问"
+      suggestion: "请检查 URL 是否可访问，或改用手动粘贴文本后调用 calculateStats(text)"
     };
   }
 }
 
 async function fetchWebContent(url) {
-  let fetchUrl = url;
-  if (url.includes('github.com') && !url.includes('raw.githubusercontent.com')) {
-    const parts = url.replace('https://github.com/', '').split('/');
-    if (parts.length >= 2) {
-      const [owner, repo] = parts;
-      fetchUrl = `https://raw.githubusercontent.com/${owner}/${repo}/main/README.md`;
-    }
-  }
-  try {
-    const response = await fetch(fetchUrl, {
-      headers: { 'User-Agent': 'WebContentAnalyzer/1.0' },
-      signal: AbortSignal.timeout(15000)
-    });
-    if (!response.ok) {
-      const altUrl = fetchUrl.replace('/main/', '/master/');
-      const altResp = await fetch(altUrl, {
-        headers: { 'User-Agent': 'WebContentAnalyzer/1.0' },
-        signal: AbortSignal.timeout(15000)
+  const candidates = resolveFetchCandidates(url);
+  let lastError;
+
+  for (const candidate of candidates) {
+    try {
+      const response = await fetch(candidate.url, {
+        headers: { "User-Agent": "WebContentAnalyzer/2.0" },
+        signal: AbortSignal.timeout(SKILL_CONFIG.timeoutMs)
       });
-      if (!altResp.ok) throw new Error(`HTTP ${response.status}`);
-      return (await altResp.text()).substring(0, SKILL_CONFIG.maxFetchLength);
+
+      if (!response.ok) {
+        lastError = new Error(`HTTP ${response.status} ${response.statusText}`);
+        continue;
+      }
+
+      const contentType = response.headers.get("content-type") || "";
+      const raw = await response.text();
+      const truncated = raw.length > SKILL_CONFIG.maxFetchLength;
+      return {
+        requestedUrl: url,
+        fetchedUrl: candidate.url,
+        sourceType: candidate.type,
+        kind: contentType.includes("text/html") ? "html" : "text",
+        contentType,
+        sourceChars: raw.length,
+        truncated,
+        content: truncated ? raw.slice(0, SKILL_CONFIG.maxFetchLength) : raw
+      };
+    } catch (error) {
+      lastError = error;
     }
-    return (await response.text()).substring(0, SKILL_CONFIG.maxFetchLength);
-  } catch (err) {
-    throw new Error(`fetch failed: ${err.message}`);
   }
+
+  throw new Error(lastError ? lastError.message : "no fetch candidates available");
 }
 
-/**
- * 从 HTML 中提取纯文本
- */
+function resolveFetchCandidates(url) {
+  const parsed = new URL(url);
+  const candidates = [];
+
+  if (parsed.hostname === "github.com") {
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const [owner, repo, mode, branch, ...pathParts] = parts;
+
+    if (owner && repo && mode === "blob" && branch && pathParts.length > 0) {
+      candidates.push({
+        type: "github-blob",
+        url: `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${pathParts.join("/")}`
+      });
+    } else if (owner && repo && parts.length === 2) {
+      candidates.push({
+        type: "github-readme",
+        url: `https://raw.githubusercontent.com/${owner}/${repo}/main/README.md`
+      });
+      candidates.push({
+        type: "github-readme",
+        url: `https://raw.githubusercontent.com/${owner}/${repo}/master/README.md`
+      });
+      candidates.push({ type: "html", url });
+    } else {
+      candidates.push({ type: "html", url });
+    }
+  } else {
+    candidates.push({ type: "url", url });
+  }
+
+  return candidates;
+}
+
 function extractText(html) {
   if (!html) return "";
-  
-  // 移除 script 和 style 标签及其内容
-  let text = html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')  // 导航栏通常是重复内容
-    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, ''); // 页脚
-  
-  // 移除 HTML 标签
-  text = text.replace(/<[^>]+>/g, ' ');
-  
-  // 移除多余空白
-  text = text.replace(/\s+/g, ' ').trim();
-  
-  return text;
+
+  return html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, "")
+    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, "")
+    .replace(/<\/(p|div|section|article|main|header|h[1-6]|li|tr|br)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
-/**
- * 计算文本统计信息
- */
-function calculateStats(text) {
-  const charCount = text.length;
-  const chineseChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
-  const englishWords = (text.match(/[a-zA-Z]+/g) || []).length;
-  const tokenEstimate = Math.ceil(charCount * SKILL_CONFIG.tokenRatio);
-  const lineCount = text.split('\n').length;
-  
-  // 估算屏幕数（假设一屏 80 行，每行 50 字）
-  const screenEstimate = Math.ceil(charCount / 4000);
-  
+function calculateStats(text, meta = {}) {
+  const value = text || "";
+  const charCount = value.length;
+  const chineseChars = (value.match(/[\u4e00-\u9fff]/g) || []).length;
+  const cjkChars = (value.match(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g) || []).length;
+  const englishWords = (value.match(/[A-Za-z]+(?:['-][A-Za-z]+)*/g) || []).length;
+  const digitGroups = (value.match(/\d+(?:[.,]\d+)*/g) || []).length;
+  const nonWhitespaceChars = (value.match(/\S/g) || []).length;
+  const lineCount = value ? value.split(/\r?\n/).length : 0;
+  const estimatedTokens = estimateTokens({
+    cjkChars,
+    englishWords,
+    digitGroups,
+    nonWhitespaceChars
+  });
+  const estimatedScreens = Math.max(1, Math.ceil(charCount / 4000));
+
   return {
     charCount,
+    sourceChars: meta.sourceChars ?? charCount,
+    analyzedChars: meta.analyzedChars ?? charCount,
+    truncated: Boolean(meta.truncated),
     chineseChars,
+    cjkChars,
     englishWords,
-    tokenEstimate,
+    digitGroups,
+    estimatedTokens,
     lineCount,
-    screenEstimate
+    estimatedScreens
   };
 }
 
-/**
- * 评估内容等级
- */
+function estimateTokens(stats) {
+  const knownTokenishChars = stats.cjkChars + stats.englishWords * 4.7 + stats.digitGroups * 3;
+  const otherChars = Math.max(0, stats.nonWhitespaceChars - knownTokenishChars);
+
+  return Math.ceil(
+    stats.cjkChars * 1.2 +
+    stats.englishWords * 1.35 +
+    stats.digitGroups * 1.1 +
+    otherChars * 0.45
+  );
+}
+
 function assessLevel(stats) {
   const { charCount } = stats;
-  
+
   if (charCount < SKILL_CONFIG.safeThreshold) {
     return {
       level: "safe",
       emoji: "🟢",
       label: "安全",
-      description: "内容较短，AI 可以完整读取",
-      strategy: "直接给 AI 链接或粘贴全文",
-      confidence: "high"
+      description: "内容较短，通常适合直接阅读或总结",
+      strategy: "可以直接给 AI 链接或文本"
     };
-  } else if (charCount < SKILL_CONFIG.warningThreshold) {
+  }
+
+  if (charCount < SKILL_CONFIG.warningThreshold) {
     return {
-      level: "warning", 
+      level: "warning",
       emoji: "🟡",
-      label: "警告",
-      description: "内容中等，AI 可能截断尾部",
-      strategy: "给链接 + 指定章节，或分段询问",
-      confidence: "medium"
-    };
-  } else {
-    return {
-      level: "danger",
-      emoji: "🔴", 
-      label: "危险",
-      description: "内容很长，AI 只能读前面一小部分",
-      strategy: "必须拆分：先问文档结构，再逐步深入具体章节",
-      confidence: "low"
+      label: "注意",
+      description: "内容中等，一次性处理可能混入无关细节",
+      strategy: "最好说明你的目标，或指定章节/问题"
     };
   }
-}
 
-/**
- * 生成推荐 Prompt
- */
-function generatePrompts(url, assessment) {
-  const prompts = {
-    direct: `请阅读 ${url} 的内容，总结关键信息`,
-    
-    structured: `请查看 ${url}：
-1. 文档的整体结构是什么？有哪些主要章节？
-2. 每个章节大概讲什么？
-请先回答结构，我们再深入具体内容`,
-
-    sectionSpecific: (section) => `请查看 ${url} 的"${section}"部分：
-- 只阅读这个章节
-- 不要阅读其他部分
-- 总结该章节的关键点`,
-
-    withContext: (context) => `基于以下背景信息：
-${context}
-
-请查看 ${url} 的相关部分，给出针对性建议`
-  };
-  
-  // 根据等级推荐最佳 Prompt
-  let recommendedPrompt;
-  switch (assessment.level) {
-    case "safe":
-      recommendedPrompt = prompts.direct;
-      break;
-    case "warning":
-      recommendedPrompt = prompts.structured;
-      break;
-    case "danger":
-      recommendedPrompt = prompts.structured + "\n\n（注意：该文档很长，建议分多次询问）";
-      break;
-  }
-  
   return {
-    ...prompts,
-    recommended: recommendedPrompt
+    level: "danger",
+    emoji: "🔴",
+    label: "过长",
+    description: "内容很长，即使能 fetch 到，也不适合一次性塞给 AI",
+    strategy: "先问结构，再按章节、任务或关键词分块处理"
   };
 }
 
-/**
- * 生成完整报告
- */
-function generateReport(url, stats, assessment, prompts) {
+function generateRecommendations(url, assessment, stats) {
+  const prompts = {
+    direct: `请阅读 ${url}，围绕我的问题提取关键信息。`,
+    taskFirst: `请先判断 ${url} 里哪些部分和我的目标有关，再只读取相关部分回答。`,
+    structured: `请查看 ${url}，先回答：
+1. 这份内容的主要结构是什么？
+2. 哪些章节和我的目标最相关？
+3. 建议我下一步先看哪一部分？`,
+    sectionSpecific: (section) => `请只查看 ${url} 中和 "${section}" 有关的部分，忽略其他章节。`
+  };
+
+  let bestPrompt = prompts.direct;
+  if (assessment.level === "warning") bestPrompt = prompts.taskFirst;
+  if (assessment.level === "danger") bestPrompt = prompts.structured;
+
+  const actions = [];
+  if (assessment.level === "safe") {
+    actions.push("直接阅读或总结");
+  } else if (assessment.level === "warning") {
+    actions.push("带着明确问题阅读");
+    actions.push("优先读取安装、配置、限制、故障排查等目标章节");
+  } else {
+    actions.push("先获取目录或标题结构");
+    actions.push("按章节分块读取");
+    actions.push("每次只问一个具体目标");
+  }
+
+  if (stats.truncated) {
+    actions.push("注意：本次只分析了前一部分内容，原文更长");
+  }
+
+  return {
+    bestPrompt,
+    actions,
+    alternativePrompts: {
+      direct: prompts.direct,
+      taskFirst: prompts.taskFirst,
+      structured: prompts.structured
+    }
+  };
+}
+
+function generateReport(url, fetched, stats, assessment, recommendations) {
   return {
     url,
+    fetchedUrl: fetched.fetchedUrl,
+    sourceType: fetched.sourceType,
     timestamp: new Date().toISOString(),
-    
     statistics: {
       totalChars: stats.charCount,
+      sourceChars: stats.sourceChars,
+      analyzedChars: stats.analyzedChars,
+      truncated: stats.truncated,
       chineseChars: stats.chineseChars,
+      cjkChars: stats.cjkChars,
       englishWords: stats.englishWords,
-      estimatedTokens: stats.tokenEstimate,
+      estimatedTokens: stats.estimatedTokens,
       lineCount: stats.lineCount,
-      estimatedScreens: stats.screenEstimate
+      estimatedScreens: stats.estimatedScreens
     },
-    
-    assessment: {
-      level: assessment.level,
-      emoji: assessment.emoji,
-      label: assessment.label,
-      description: assessment.description,
-      strategy: assessment.strategy,
-      confidence: assessment.confidence
-    },
-    
-    recommendations: {
-      bestPrompt: prompts.recommended,
-      alternativePrompts: {
-        direct: prompts.direct,
-        structured: prompts.structured
-      }
-    },
-    
+    assessment,
+    recommendations,
     thresholds: {
       safe: SKILL_CONFIG.safeThreshold,
       warning: SKILL_CONFIG.warningThreshold,
@@ -243,68 +269,72 @@ function generateReport(url, stats, assessment, prompts) {
   };
 }
 
-/**
- * 格式化输出（给用户看的）
- */
 function formatReport(report) {
   if (report.error) {
     return `❌ ${report.message}\n💡 ${report.suggestion}`;
   }
-  
+
   const { statistics, assessment, recommendations } = report;
-  
+  const truncationNote = statistics.truncated
+    ? `\n截断提示: 原始内容 ${statistics.sourceChars.toLocaleString()} 字，本次分析前 ${statistics.analyzedChars.toLocaleString()} 字`
+    : "";
+
   return `
-📊 网页内容分析报告
+📊 内容预算分析报告
 ═══════════════════════════════════════
 
-🔗 URL: ${report.url}
+🔗 输入 URL: ${report.url}
+📥 实际读取: ${report.fetchedUrl}
 ⏰ 分析时间: ${report.timestamp}
 
 📈 统计信息
 ─────────────────────────────────────
-总字符数: ${statistics.totalChars.toLocaleString()} 字
-中文字符: ${statistics.chineseChars.toLocaleString()} 字
+可读字符数: ${statistics.totalChars.toLocaleString()} 字
+中文/CJK 字符: ${statistics.cjkChars.toLocaleString()} 字
 英文单词: ${statistics.englishWords.toLocaleString()} 个
-估算 Token: ${statistics.estimatedTokens.toLocaleString()} tokens
-代码行数: ${statistics.lineCount.toLocaleString()} 行
-估算屏数: 约 ${statistics.estimatedScreens} 屏
+粗估 Token: ${statistics.estimatedTokens.toLocaleString()} tokens
+行数: ${statistics.lineCount.toLocaleString()} 行
+估算屏数: 约 ${statistics.estimatedScreens} 屏${truncationNote}
 
 🎯 评估结果
 ─────────────────────────────────────
 等级: ${assessment.emoji} ${assessment.label}
 说明: ${assessment.description}
-策略: ${assessment.strategy}
-置信度: ${assessment.confidence}
+建议: ${assessment.strategy}
 
 💡 推荐 Prompt
 ─────────────────────────────────────
 ${recommendations.bestPrompt}
 
-📋 其他选项
+✅ 推荐动作
 ─────────────────────────────────────
-直接询问: ${recommendations.alternativePrompts.direct}
-结构化询问: ${recommendations.alternativePrompts.structured}
+${recommendations.actions.map((action) => `- ${action}`).join("\n")}
 
 ═══════════════════════════════════════
 `;
 }
 
-// 导出函数
 module.exports = {
   analyzeWebPage,
+  fetchWebContent,
+  resolveFetchCandidates,
+  extractText,
+  calculateStats,
+  assessLevel,
   formatReport,
   SKILL_CONFIG
 };
 
-// 如果是直接运行，执行示例
 if (require.main === module) {
-  const testUrl = process.argv[2] || "https://github.com/openclaw/openclaw";
-  
-  analyzeWebPage(testUrl)
-    .then(report => {
+  const targetUrl = process.argv[2] || "https://github.com/openclaw/openclaw";
+
+  analyzeWebPage(targetUrl)
+    .then((report) => {
       console.log(formatReport(report));
+      if (report.error) process.exitCode = 1;
     })
-    .catch(err => {
+    .catch((err) => {
       console.error("分析失败:", err);
+      process.exitCode = 1;
     });
 }

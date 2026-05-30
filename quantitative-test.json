@@ -1,16 +1,32 @@
 [
   {
-    "url": "https://www.google.com/search?q=openclaw",
-    "error": "Cannot read properties of undefined (reading 'totalChars')"
+    "scenario": "short_text",
+    "input": "800 Chinese-like characters",
+    "expected_level": "safe",
+    "reason": "Short content can usually be read directly."
   },
   {
-    "url": "https://www.baidu.com/s?wd=openclaw",
-    "chars": 0,
-    "tokens": 0,
-    "level": "safe"
+    "scenario": "medium_text",
+    "input": "6000 Chinese-like characters",
+    "expected_level": "warning",
+    "reason": "Medium content benefits from a clear task or section target."
   },
   {
-    "url": "https://github.com/yang1996202-cpu/web-content-analyzer",
-    "error": "Cannot read properties of undefined (reading 'totalChars')"
+    "scenario": "long_text",
+    "input": "24000 Chinese-like characters",
+    "expected_level": "danger",
+    "reason": "Long content should be routed through structure-first or chunked reading."
+  },
+  {
+    "scenario": "github_repo_url",
+    "input": "https://github.com/owner/repo",
+    "expected_first_candidate": "https://raw.githubusercontent.com/owner/repo/main/README.md",
+    "reason": "Repository home pages should analyze README first."
+  },
+  {
+    "scenario": "github_blob_url",
+    "input": "https://github.com/owner/repo/blob/dev/docs/guide.md",
+    "expected_first_candidate": "https://raw.githubusercontent.com/owner/repo/dev/docs/guide.md",
+    "reason": "Specific GitHub file URLs should not be replaced by README."
   }
 ]
